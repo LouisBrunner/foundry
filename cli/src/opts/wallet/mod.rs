@@ -13,6 +13,7 @@ use ethers::{
         Address, Signature,
     },
 };
+use ethers_signers_browser::{BrowserSigner, BrowserSignerError};
 use eyre::{bail, Result, WrapErr};
 use foundry_common::fs;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,7 @@ pub mod error;
 /// 5. Private Key (cleartext in CLI)
 /// 6. Private Key (interactively via secure prompt)
 /// 7. AWS KMS
+/// 8. Browser-based (e.g. MetaMask, Coinbase Wallet)
 #[derive(Parser, Debug, Default, Clone, Serialize)]
 #[clap(next_help_heading = "Wallet options", about = None, long_about = None)]
 pub struct Wallet {
@@ -135,6 +137,10 @@ pub struct Wallet {
     /// Use AWS Key Management Service.
     #[clap(long, help_heading = "Wallet options - AWS KMS")]
     pub aws: bool,
+
+    /// Use a browser-based wallet.
+    #[clap(long, help_heading = "Wallet options - browser-based")]
+    pub browser: bool,
 }
 
 impl Wallet {
@@ -233,6 +239,8 @@ Make sure it's connected and unlocked, with no other conflicting desktop wallet 
             let aws_signer = AwsSigner::new(kms, key_id, chain_id).await?;
 
             Ok(WalletSigner::Aws(aws_signer))
+        } else if self.browser {
+            Ok(WalletSigner::Browser(BrowserSigner::new(chain_id).await?))
         } else {
             trace!("finding local key");
 
@@ -244,7 +252,7 @@ Make sure it's connected and unlocked, with no other conflicting desktop wallet 
 Error accessing local wallet. Did you set a private key, mnemonic or keystore?
 Run `cast send --help` or `forge create --help` and use the corresponding CLI
 flag to set your key via:
---private-key, --mnemonic-path, --aws, --interactive, --trezor or --ledger.
+--private-key, --mnemonic-path, --aws, --interactive, --trezor, --ledger or --browser.
 Alternatively, if you're using a local node with unlocked accounts,
 use the --unlocked flag and either set the `ETH_FROM` environment variable to the address
 of the unlocked account you want to use, or provide the --from flag with the address directly."
@@ -280,14 +288,14 @@ pub trait WalletTrait {
                         // SAFETY: at this point we know the user actually wanted to use an env var
                         // and most likely forgot the `$` anchor, so the
                         // `private_key` here is an unresolved env var
-                        return Err(PrivateKeyError::ExistsAsEnvVar(pk.to_string()))
+                        return Err(PrivateKeyError::ExistsAsEnvVar(pk.to_string()));
                     }
                     Ok(())
                 };
                 match err {
                     WalletError::HexError(err) => {
                         ensure_not_env(private_key)?;
-                        return Err(PrivateKeyError::InvalidHex(err).into())
+                        return Err(PrivateKeyError::InvalidHex(err).into());
                     }
                     WalletError::EcdsaError(_) => {
                         ensure_not_env(private_key)?;
@@ -399,6 +407,8 @@ pub enum WalletSignerError {
     Trezor(#[from] TrezorError),
     #[error(transparent)]
     Aws(#[from] AwsSignerError),
+    #[error(transparent)]
+    Browser(#[from] BrowserSignerError),
 }
 
 #[derive(Debug)]
@@ -407,6 +417,7 @@ pub enum WalletSigner {
     Ledger(Ledger),
     Trezor(Trezor),
     Aws(AwsSigner),
+    Browser(BrowserSigner),
 }
 
 impl From<LocalWallet> for WalletSigner {
@@ -433,6 +444,12 @@ impl From<AwsSigner> for WalletSigner {
     }
 }
 
+impl From<BrowserSigner> for WalletSigner {
+    fn from(wallet: BrowserSigner) -> Self {
+        Self::Browser(wallet)
+    }
+}
+
 macro_rules! delegate {
     ($s:ident, $inner:ident => $e:expr) => {
         match $s {
@@ -440,6 +457,7 @@ macro_rules! delegate {
             Self::Ledger($inner) => $e,
             Self::Trezor($inner) => $e,
             Self::Aws($inner) => $e,
+            Self::Browser($inner) => $e,
         }
     };
 }
@@ -480,6 +498,7 @@ impl Signer for WalletSigner {
             Self::Ledger(inner) => Self::Ledger(inner.with_chain_id(chain_id)),
             Self::Trezor(inner) => Self::Trezor(inner.with_chain_id(chain_id)),
             Self::Aws(inner) => Self::Aws(inner.with_chain_id(chain_id)),
+            Self::Browser(inner) => Self::Browser(inner.with_chain_id(chain_id)),
         }
     }
 }
@@ -560,6 +579,7 @@ mod tests {
             aws: false,
             hd_path: None,
             mnemonic_index: 0,
+            browser: false,
         };
         match wallet.private_key() {
             Ok(_) => {

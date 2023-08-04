@@ -6,6 +6,7 @@ use ethers::{
     signers::{AwsSigner, HDPath as LedgerHDPath, Ledger, LocalWallet, Trezor, TrezorHDPath},
     types::Address,
 };
+use ethers_signers_browser::BrowserSigner;
 use eyre::{Context, ContextCompat, Result};
 use foundry_common::RetryProvider;
 use foundry_config::Config;
@@ -67,6 +68,7 @@ macro_rules! create_hw_wallets {
 /// 5. Private Keys (cleartext in CLI)
 /// 6. Private Keys (interactively via secure prompt)
 /// 7. AWS KMS
+/// 8. Browser-based (e.g. MetaMask, Coinbase Wallet)
 #[derive(Parser, Debug, Clone, Serialize, Default)]
 #[clap(next_help_heading = "Wallet options", about = None, long_about = None)]
 pub struct MultiWallet {
@@ -187,6 +189,10 @@ pub struct MultiWallet {
     /// Use AWS Key Management Service.
     #[clap(long, help_heading = "Wallet options - remote")]
     pub aws: bool,
+
+    /// Use a browser-based wallet.
+    #[clap(long, help_heading = "Wallet options - browser-based")]
+    pub browser: bool,
 }
 
 impl WalletTrait for MultiWallet {
@@ -220,6 +226,7 @@ impl MultiWallet {
                 self.mnemonics()?,
                 self.keystores()?,
                 self.aws_signers(chain).await?,
+                self.browsers(chain).await?,
                 (!script_wallets.is_empty()).then(|| script_wallets.to_vec())
             ],
             for wallet in wallets.into_iter() {
@@ -231,7 +238,7 @@ impl MultiWallet {
                     local_wallets.insert(address, signer);
 
                     if addresses.is_empty() {
-                        return Ok(local_wallets)
+                        return Ok(local_wallets);
                     }
                 } else {
                     // Just to show on error.
@@ -262,7 +269,7 @@ impl MultiWallet {
             for _ in 0..self.interactives {
                 wallets.push(self.get_from_interactive()?);
             }
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -273,7 +280,7 @@ impl MultiWallet {
             for private_key in private_keys.iter() {
                 wallets.push(self.get_from_private_key(private_key.trim())?);
             }
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -294,7 +301,7 @@ impl MultiWallet {
             for path in keystore_paths {
                 wallets.push(self.get_from_keystore(Some(path), passwords_iter.next().as_ref(), password_files_iter.next().as_ref())?.wrap_err("Keystore paths do not have the same length as provided passwords or password files.")?);
             }
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -329,7 +336,7 @@ impl MultiWallet {
                     mnemonic_index,
                 )?)
             }
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -346,7 +353,7 @@ impl MultiWallet {
             }
 
             create_hw_wallets!(args, chain_id, get_from_ledger, wallets);
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -354,7 +361,7 @@ impl MultiWallet {
     pub async fn trezors(&self, chain_id: u64) -> Result<Option<Vec<Trezor>>> {
         if self.trezor {
             create_hw_wallets!(self, chain_id, get_from_trezor, wallets);
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
@@ -376,7 +383,17 @@ impl MultiWallet {
                 wallets.push(aws_signer)
             }
 
-            return Ok(Some(wallets))
+            return Ok(Some(wallets));
+        }
+        Ok(None)
+    }
+
+    pub async fn browsers(&self, chain_id: u64) -> Result<Option<Vec<BrowserSigner>>> {
+        if self.browser {
+            let mut wallets = vec![];
+            let browser_signer = BrowserSigner::new(chain_id).await?;
+            wallets.push(browser_signer);
+            return Ok(Some(wallets));
         }
         Ok(None)
     }
